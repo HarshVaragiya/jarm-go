@@ -9,13 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
-
-	"golang.org/x/net/proxy"
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/hdm/jarm-go"
+	"github.com/HarshVaragiya/jarm-go"
 )
 
 // Version is set by the goreleaser build
@@ -101,85 +98,6 @@ func CrackPortsWithDefaults(pspec string, defaults []uint16) ([]int, error) {
 	return results, nil
 }
 
-// Fingerprint probes a single host/port
-func Fingerprint(t target, och chan result) {
-
-	results := []string{}
-	for _, probe := range jarm.GetProbes(t.Host, t.Port) {
-		dialer := proxy.FromEnvironmentUsing(&net.Dialer{Timeout: time.Second * 2})
-		addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
-
-		c := net.Conn(nil)
-		n := 0
-
-		for c == nil && n <= t.Retries {
-			// Ignoring error since error message was already being dropped.
-			// Also, if theres an error, c == nil.
-			if c, _ = dialer.Dial("tcp", addr); c != nil || t.Retries == 0 {
-				break
-			}
-
-			bo := t.Backoff
-			if bo == nil {
-				bo = DefualtBackoff
-			}
-
-			time.Sleep(bo(n, t.Retries))
-
-			n++
-		}
-
-		if c == nil {
-			return
-		}
-
-		data := jarm.BuildProbe(probe)
-		c.SetWriteDeadline(time.Now().Add(time.Second * 5))
-		_, err := c.Write(data)
-		if err != nil {
-			results = append(results, "")
-			c.Close()
-			continue
-		}
-
-		c.SetReadDeadline(time.Now().Add(time.Second * 5))
-		buff := make([]byte, 1484)
-		c.Read(buff)
-		c.Close()
-
-		ans, err := jarm.ParseServerHello(buff, probe)
-		if err != nil {
-			results = append(results, "")
-			continue
-		}
-
-		results = append(results, ans)
-	}
-
-	och <- result{
-		Target: t,
-		Hash:   jarm.RawHashToFuzzyHash(strings.Join(results, ",")),
-	}
-}
-
-var DefualtBackoff = func(r, m int) time.Duration {
-	return time.Second
-}
-
-type target struct {
-	Host string
-	Port int
-
-	Retries int
-	Backoff func(r, m int) time.Duration
-}
-
-type result struct {
-	Target target
-	Hash   string
-	Error  error
-}
-
 func main() {
 	flag.Parse()
 
@@ -201,8 +119,8 @@ func main() {
 		log.Fatalf("invalid ports: %s", err)
 	}
 
-	tch := make(chan target, 1)
-	och := make(chan result, 1)
+	tch := make(chan jarm.Target, 1)
+	och := make(chan *jarm.Result, 1)
 
 	wgo := sync.WaitGroup{}
 	wgt := sync.WaitGroup{}
@@ -212,7 +130,7 @@ func main() {
 		go func() {
 			defer wgt.Done()
 			for t := range tch {
-				Fingerprint(t, och)
+				jarm.AsyncFingerprint(t, och)
 			}
 		}()
 	}
@@ -238,7 +156,7 @@ func main() {
 	// Process targets
 	for _, s := range flag.Args() {
 
-		t := target{}
+		t := jarm.Target{}
 
 		// Try parsing as a URL first
 		if u, err := url.Parse(s); err == nil {
@@ -296,10 +214,9 @@ func main() {
 						ports = []int{t.Port}
 					}
 					for _, port := range ports {
-						tch <- target{
-							Host: thost,
-							Port: port,
-
+						tch <- jarm.Target{
+							Host:    thost,
+							Port:    port,
 							Retries: *retries,
 						}
 					}
