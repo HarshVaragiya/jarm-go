@@ -53,7 +53,11 @@ func Fingerprint(t Target) (*Result, error) {
 		}
 
 		if c == nil {
-			return nil, fmt.Errorf("error building JARM fingerprint")
+			return &Result{
+				Target: t,
+				Hash:   ZeroHash,
+				Error:  fmt.Errorf("error building JARM Fingerprint"),
+			}, fmt.Errorf("error building JARM fingerprint")
 		}
 
 		data := BuildProbe(probe)
@@ -82,6 +86,7 @@ func Fingerprint(t Target) (*Result, error) {
 	return &Result{
 		Target: t,
 		Hash:   RawHashToFuzzyHash(strings.Join(results, ",")),
+		Error:  nil,
 	}, nil
 }
 
